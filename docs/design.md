@@ -71,6 +71,50 @@ Jev error or timeout, routing falls back to exact-topic match. This is
 configurable, because a deployment where over-delivery leaks information
 would rather drop.
 
+### Interest storage: key per interest, plus an index set
+
+```
+int:<topic>:<connID>  -> predicate, with a TTL
+idx:<topic>           -> set of connIDs interested in that topic
+conn:<connID>         -> set of topics that connection has interests in
+```
+
+`Candidates` reads `SMEMBERS idx:<topic>` then `MGET` — two round trips
+per publish. A hash per topic would be one, which is tempting because
+this is the publish hot path.
+
+Rejected because Redis before 7.4 has no per-field TTL (`HEXPIRE`), so an
+instance killed without running its disconnect hook would leak its
+subscribers' fields permanently, and **every later publish would pay Jev
+tokens to judge subscribers that no longer exist**. That is exactly what
+N6 forbids.
+
+The extra round trip is under a millisecond against a judge call measured
+at 200–530ms — roughly half a percent of the publish budget. Self-healing
+is worth far more than that.
+
+Consequences:
+
+- Deletion on disconnect is the normal path; the TTL is the backstop for
+  when that path never runs.
+- `conn:<connID>` exists so a disconnect can find what to delete without
+  scanning the keyspace.
+- Entries whose key has expired are skipped **and pruned from the index**
+  as they are encountered, so the index converges without a sweeper.
+- The TTL must be refreshed while a connection is demonstrably alive,
+  from middleware on inbound frames. It defaults to an hour: too short
+  and a quiet but healthy subscriber silently stops receiving.
+
+### Pin the model version for a measurement run
+
+`jev-latest` is an alias that moves when a new release ships. Convenient
+for development, wrong for M1: a run whose judgments came from two
+different models measures the release, not the stability.
+
+The client defaults to the alias and accepts a versioned ID. The
+measurement harness must pin one. The response reports the versioned ID
+that actually answered, so every result stays attributable either way.
+
 ### Noul, one per subscriber
 
 Each interest becomes a **Noul** question — probability that a condition
@@ -89,12 +133,21 @@ routing decision and the log line together.
 Per-connection rather than per-user on purpose: one user may hold several
 sockets with different interests.
 
+## Verified so far
+
+- **Interests survive a crashed instance.** An interest that stops being
+  refreshed expires and is pruned from the index, while a refreshed one
+  survives — verified against a clock-advanced Redis.
+
+- **The client discriminates on live Jev.** A disk-capacity alert scored
+  0.980 for a storage interest against 0.050 / 0.040 / 0.030 for network,
+  security and region interests — including correctly scoring an
+  eu-west subscriber low on a `us-east-1` alert, which catches a judge
+  keying on topic rather than content. 593 input tokens, $0.000025,
+  526ms for four predicates in one request.
+
 ## Open questions
 
-- **Storage shape in Redis.** A hash per topic is one round trip to read
-  all candidates but grows unbounded per topic; a key per interest is
-  cleaner to expire but needs a scan or an index set. Leaning toward a
-  hash per topic plus a TTL-refreshing index, undecided.
 - **What happens above the context limit.** 32k tokens caps predicates
   per request. Chunk into several requests, cap interests per topic, or
   pre-filter cheaply first? Affects N2 and the cost story.
@@ -115,8 +168,15 @@ sockets with different interests.
   without tokens or network.
 - **A keyword judge** implementing the same interface, for integration
   tests and local development — the validated stand-in described above.
-- **Live Jev** only in the measurement harness (M1–M3), which is
-  explicitly opt-in and reports token spend.
+- **Live Jev** only behind the `live` build tag, so it cannot run by
+  accident:
+
+  ```bash
+  go test -tags=live ./internal/jev/ -v
+  ```
+
+  These skip when no `TYPESAFE_API_KEY` is present, and log token spend
+  and cost on every run. The same tag gates the measurement harness.
 
 The measurement harness is a first-class deliverable, not test
 scaffolding: M1–M3 are the project's actual output.
