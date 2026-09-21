@@ -113,6 +113,11 @@ go test ./...                            # unit, free, no network
 go test -tags=live ./internal/jev/ -v    # one real call, ~$0.000025
 ```
 
+CI runs the unit tests and **compiles** the live-tagged ones without
+running them — build tags are invisible to `go build` and to an untagged
+`go vet`, so without an explicit tagged check a live test can quietly
+stop compiling. Nothing in CI calls the real API or needs a key.
+
 ## License
 
 [MIT](./LICENSE)

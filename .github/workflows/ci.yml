@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Cancel a superseded run rather than paying for both.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+          cache: true
+
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "These files need gofmt:"
+            echo "$unformatted"
+            gofmt -d .
+            exit 1
+          fi
+
+      - name: vet
+        run: go vet ./...
+
+      # Build tags hide code from every default check: `go build` skips
+      # _test.go files entirely, and `go vet ./...` does not look behind a
+      # tag. internal/jev/live_test.go is invisible to both, so without
+      # these two steps it could stop compiling and nothing would notice
+      # until someone ran it by hand.
+      #
+      # These type-check and compile it. They never RUN it: live tests
+      # call the real API and cost money, and CI has no key.
+      - name: vet live-tagged code
+        run: go vet -tags=live ./...
+
+      - name: compile live-tagged tests without running them
+        run: go test -tags=live -run '^$' -count=1 ./... > /dev/null
+
+      - name: build
+        run: go build ./...
+
+      # Unit tests only. They use miniredis and stubs, so there is no
+      # service container and no network.
+      - name: test
+        run: go test -race -timeout 120s ./...

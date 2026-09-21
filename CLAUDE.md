@@ -32,6 +32,8 @@ not good enough" is a valid, reportable result.
 - Live Jev calls cost money. Unit tests use a stubbed judge; integration
   tests use the keyword judge. Only the measurement harness calls the real
   API, opt-in, and it reports token spend.
+- CI runs unit tests and *compiles* live-tagged code without running it.
+  Never add a CI step that calls the real API: it costs money per run.
 - Commits are atomic and explain *why*, not just what. No co-authors.
 - All work on `main`. No worktrees.
 
