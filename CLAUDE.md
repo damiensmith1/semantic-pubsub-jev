@@ -59,3 +59,9 @@ change (not a followup), update the relevant doc when you:
 
 Don't fabricate a decision that wasn't actually made. If it's unclear
 whether something is doc-worthy, ask instead of guessing.
+
+## License
+
+MIT, matching go-ws-server. A dependency licensed more restrictively than
+the thing that depends on it would be a problem, so keep new dependencies
+permissive (MIT, BSD, Apache-2.0).
