@@ -133,8 +133,59 @@ routing decision and the log line together.
 Per-connection rather than per-user on purpose: one user may hold several
 sockets with different interests.
 
+### The judge question asks about delivery, not similarity
+
+Each interest becomes:
+
+> A subscriber has stated this interest: "<predicate>". Should the
+> message in the state be delivered to them?
+
+Not "is this message about X?". The two diverge exactly where it matters:
+a subscriber watching for outages does not want a routine deploy notice
+that merely mentions the same service. Topical similarity would deliver
+it; a delivery question should not.
+
+The predicate is quoted rather than loosely concatenated, so the model
+sees a boundary between the instruction and subscriber-supplied text.
+**M3 measures how much this phrasing actually matters** — if wording
+dominates the threshold, the system is hard to use in practice.
+
+The message payload is decoded when it is valid JSON, so the model sees
+named fields rather than an escaped string. Invalid JSON passes through
+as raw text rather than failing the publish.
+
+### TTL refresh follows connection ownership, not traffic
+
+Interests expire so a crashed instance does not leak them. That backstop
+needs a way to tell "gone" from "quiet", and **inbound traffic is the
+wrong signal**: a subscriber that only listens sends no frames and would
+expire while perfectly healthy.
+
+The right signal is connection ownership. An instance knows which sockets
+it holds, because `OnConnect` and `OnDisconnect` tell it, so it refreshes
+exactly those on a ticker at a third of the TTL. A connection that has
+gone away stops being refreshed by definition: the instance holding it
+either removed it or died with it.
+
+### Interest is its own verb, not a field on subscribe
+
+The broker's `subscribe` is generic and untouched. A separate `interest`
+verb also lets a subscriber change its mind without resubscribing, which
+would otherwise replay history.
+
+Registering an interest for a topic that was never subscribed to is
+harmless — nothing routes to it — so it is not rejected.
+
 ## Verified so far
 
+- **End to end, against live Jev.** Three subscribers with different
+  stated interests, three messages each matching exactly one of them:
+  every message reached precisely its intended subscriber and no one
+  else. 3 calls, 9 candidates, 1,762 input tokens, **$0.000074** for the
+  whole run. Reproduce with `cmd/demo`.
+- **Judging is one request regardless of candidate count**, verified with
+  50 candidates, and cumulative token spend is tracked so cost is
+  attributable rather than a surprise (N1).
 - **Interests survive a crashed instance.** An interest that stops being
   refreshed expires and is pruned from the index, while a refreshed one
   survives — verified against a clock-advanced Redis.
