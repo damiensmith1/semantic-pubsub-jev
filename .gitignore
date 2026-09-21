@@ -1,0 +1,33 @@
+# Secrets. The API key lives here; never commit it.
+.env
+.env.*
+!.env.example
+
+# Compiled binaries. Built to the repo root by `go build`, and to cmd/
+# subdirectories by `go build ./cmd/...`.
+/semantic-pubsub-jev
+/cmd/*/[a-z]*
+!/cmd/*/*.go
+*.exe
+
+# Test and profiling output
+*.test
+*.out
+coverage.*
+cpu.prof
+mem.prof
+
+# Experiment results, which are large, regenerable, and machine-specific.
+# Committed results belong in docs/ as curated tables, not raw dumps.
+/results/
+
+# Go workspace files. Used locally to develop against a checked-out
+# go-ws-server; the committed go.mod must resolve without one.
+go.work
+go.work.sum
+
+# Editors and OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
