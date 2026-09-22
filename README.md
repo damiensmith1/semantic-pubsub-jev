@@ -37,39 +37,40 @@ Measured: going from 1 to 100 predicates in a single request moved
 latency from **193ms to 224ms** — near-flat. Cost is linear but small,
 around **$0.30 per 1,000 publishes** at 100 subscribers.
 
-## Status: an experiment, half done
+## Status: two pass, one fails
 
-The machinery works end to end. Whether semantic routing is *reliable
-enough to depend on* is unmeasured, and that is the actual deliverable.
+An experiment packaged as a library. The machinery was never the
+deliverable on its own — the question was whether semantic routing is
+reliable enough to depend on, and "it is not" was always a permitted
+answer. All three measurements have now been run.
 
-| | |
-| --- | --- |
-| **M1** | Judgment stability — is the routing decision reproducible? |
-| **M2** | Batch degradation — do answers worsen as predicates per request grow? |
-| **M3** | Threshold vs. wording — which matters more to whoever runs it? |
+| | | |
+| --- | --- | --- |
+| **M1** | Is the routing decision reproducible? | **pass** |
+| **M2** | Do answers worsen as predicates per request grow? | **pass** |
+| **M3** | Does phrasing decide the outcome more than the threshold? | **fail** |
 
-**All three have now been run. Two pass, one fails.**
-
-- **M1 — stability: pass.** Flip rate **0.0%** across 20 repeats, and no
-  case straddling any threshold from 0.2 to 0.9. Routing is reproducible.
-- **M2 — batch degradation: pass.** **Zero decision changes** from 6 to
-  200 predicates in one request. 200 subscribers judged in **327ms** for
+- **M1 — stability.** Flip rate **0.0%** across 20 repeats, with no case
+  straddling any threshold from 0.2 to 0.9. Routing is reproducible.
+- **M2 — batch degradation.** **Zero decision changes** from 6 to 200
+  predicates in one request. 200 subscribers judged in **327ms** for
   **$0.81 per 1,000 publishes**.
-- **M3 — wording sensitivity: fail.** **23.8%** of intents routed
-  differently depending only on how they were phrased, moving answers
-  **27.9x** more than the system's own noise floor.
+- **M3 — wording sensitivity.** **23.8%** of intents routed differently
+  depending only on how they were phrased, moving answers **27.9x** more
+  than the system's own noise floor.
 
-The engineering works. The interface does not, yet: the system reliably
+The engineering works; the interface does not, yet. The system reliably
 delivers what you asked for, and the hard part is knowing what you asked
 for. Adding "excluding purely internal concerns" to a predicate moved one
-case from 0.830 to 0.339 — a far stronger lever than the threshold.
+case from 0.830 to 0.339 — a far stronger lever than the threshold, which
+is the dial you would expect to reach for.
+
+That is a usability failure rather than a reliability one, which makes it
+tractable: the console exists so you can see what a predicate actually
+catches before trusting it.
 
 Total spend across all three experiments: **$0.064**.
-
 Full method, numbers and caveats: [docs/measurements.md](docs/measurements.md).
-
-"It is not good enough" was a valid result, and for M3 it is the one
-that came back.
 
 ## Running it
 
