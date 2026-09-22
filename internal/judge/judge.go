@@ -15,6 +15,7 @@ import (
 	"log/slog"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"github.com/damiensmith1/go-ws-server/bus"
 
@@ -43,6 +44,10 @@ type Options struct {
 
 	// Log is optional.
 	Log *slog.Logger
+
+	// Recorder, when set, keeps recent judgments so a live view can show
+	// what routing actually decided instead of re-judging to find out.
+	Recorder *Recorder
 }
 
 // Judge decides delivery using Jev.
@@ -50,6 +55,7 @@ type Judge struct {
 	asker     Asker
 	threshold float64
 	log       *slog.Logger
+	rec       *Recorder
 
 	// Running totals, so cost is attributable rather than a surprise on
 	// the invoice. Atomic because the broker judges publishes
@@ -64,7 +70,7 @@ func New(asker Asker, opts Options) (*Judge, error) {
 	if asker == nil {
 		return nil, fmt.Errorf("judge: an Asker is required")
 	}
-	j := &Judge{asker: asker, threshold: opts.Threshold, log: opts.Log}
+	j := &Judge{asker: asker, threshold: opts.Threshold, log: opts.Log, rec: opts.Recorder}
 	if j.threshold <= 0 {
 		j.threshold = DefaultThreshold
 	}
@@ -147,6 +153,8 @@ func (j *Judge) Judge(ctx context.Context, msg bus.Message, candidates []bus.Can
 		})
 	}
 
+	j.record(msg, candidates, decisions, resp)
+
 	if unanswered > 0 {
 		j.log.Warn("judge: some candidates went unanswered",
 			"topic", msg.Topic, "unanswered", unanswered, "asked", len(questions))
@@ -160,6 +168,36 @@ func (j *Judge) Judge(ctx context.Context, msg bus.Message, candidates []bus.Can
 		"model", resp.Model)
 
 	return decisions, nil
+}
+
+// Threshold reports the probability at or above which an interest matches.
+func (j *Judge) Threshold() float64 { return j.threshold }
+
+// record captures a judgment for the live view. Criteria are carried
+// alongside the score so a viewer can see *what* was asked, not only the
+// answer.
+func (j *Judge) record(msg bus.Message, candidates []bus.Candidate, ds []bus.Decision, resp *jev.Response) {
+	if j.rec == nil {
+		return
+	}
+	criteria := make(map[string]string, len(candidates))
+	for _, c := range candidates {
+		criteria[c.ID] = c.Criteria
+	}
+	out := make([]Decision, 0, len(ds))
+	for _, d := range ds {
+		out = append(out, Decision{
+			CandidateID: d.ID, Criteria: criteria[d.ID],
+			Score: d.Score, Deliver: d.Deliver,
+		})
+	}
+	j.rec.add(Record{
+		At: time.Now().UTC(), Topic: msg.Topic, Data: msg.Data,
+		Threshold: j.threshold, Decisions: out,
+		InputTokens: resp.Usage.InputTokens,
+		LatencyMS:   float64(resp.Latency.Microseconds()) / 1000,
+		Model:       resp.Model,
+	})
 }
 
 func countDelivered(ds []bus.Decision) int {
