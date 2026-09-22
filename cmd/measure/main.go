@@ -12,6 +12,7 @@
 //	go run ./cmd/measure -m1 -repeats 20 -dry-run   # projected cost, spends nothing
 //	go run ./cmd/measure -m1 -repeats 20            # the real thing
 //	go run ./cmd/measure -m2 -repeats 5
+//	go run ./cmd/measure -m3 -repeats 8
 //
 // Every raw response is written to results/ as JSON lines, so a run
 // happens once and can be re-analysed forever. Re-running to try a
@@ -52,6 +53,7 @@ func run() error {
 	var (
 		m1        = flag.Bool("m1", false, "run M1: judgment stability")
 		m2        = flag.Bool("m2", false, "run M2: batch degradation")
+		m3        = flag.Bool("m3", false, "run M3: wording sensitivity")
 		sizes     = flag.String("sizes", "6,25,50,100,200", "M2 batch sizes (total questions per request)")
 		repeats   = flag.Int("repeats", 20, "how many times to judge each message")
 		threshold = flag.Float64("threshold", 0.5, "routing threshold whose flips are counted")
@@ -67,13 +69,22 @@ func run() error {
 	if *analyse != "" {
 		return analyseRecorded(*analyse, *threshold)
 	}
-	if !*m1 && !*m2 {
-		return fmt.Errorf("choose an experiment: -m1 (stability) or -m2 (batch degradation)")
+	chosen := 0
+	for _, b := range []bool{*m1, *m2, *m3} {
+		if b {
+			chosen++
+		}
 	}
-	if *m1 && *m2 {
+	if chosen == 0 {
+		return fmt.Errorf("choose an experiment: -m1 (stability), -m2 (batch degradation) or -m3 (wording sensitivity)")
+	}
+	if chosen > 1 {
 		return fmt.Errorf("run one experiment at a time")
 	}
 
+	if *m3 {
+		return runM3(*repeats, *threshold, *model, *maxSpend, *maxRate, *outDir, *dryRun)
+	}
 	if *m2 {
 		return runM2(*sizes, *repeats, *threshold, *model, *maxSpend, *maxRate, *outDir, *dryRun)
 	}
@@ -435,4 +446,140 @@ func printBatchReport(r *measure.BatchReport) {
 		totalFlips += s.DecisionChanges
 	}
 	fmt.Printf("\ndecision changes vs baseline: %d\n", totalFlips)
+}
+
+func runM3(repeats int, threshold float64, model string,
+	maxSpend float64, maxRate int, outDir string, dryRun bool) error {
+
+	requests, tokens, usd := measure.EstimateWordingCost(repeats, len(measure.Messages))
+	var phrasings int
+	for _, c := range measure.Concepts {
+		phrasings += len(c.Phrasings)
+	}
+
+	fmt.Printf("M3 — wording sensitivity\n\n")
+	fmt.Printf("  concepts    %d\n", len(measure.Concepts))
+	fmt.Printf("  phrasings   %d total\n", phrasings)
+	fmt.Printf("  messages    %d\n", len(measure.Messages))
+	fmt.Printf("  pairs       %d message/concept\n", len(measure.Messages)*len(measure.Concepts))
+	fmt.Printf("  repeats     %d\n", repeats)
+	fmt.Printf("  requests    %d\n", requests)
+	fmt.Printf("  est. tokens %d\n", tokens)
+	fmt.Printf("  est. cost   $%.4f   (ceiling $%.4f)\n\n", usd, maxSpend)
+
+	if dryRun {
+		fmt.Println("dry run: nothing was sent, nothing was spent.")
+		return nil
+	}
+	if usd > maxSpend {
+		return fmt.Errorf("projected cost $%.4f exceeds the -budget ceiling $%.4f", usd, maxSpend)
+	}
+
+	_ = godotenv.Load()
+	key := os.Getenv("TYPESAFE_API_KEY")
+	if key == "" {
+		return fmt.Errorf("TYPESAFE_API_KEY is not set; put it in .env")
+	}
+	client, err := jev.New(jev.Options{APIKey: key, Model: model})
+	if err != nil {
+		return err
+	}
+	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	limited, err := budget.New(client, budget.Options{
+		MaxSpendUSD: maxSpend, MaxCallsPerMin: maxRate, Log: log,
+	})
+	if err != nil {
+		return err
+	}
+
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		return err
+	}
+	rawPath := filepath.Join(outDir, fmt.Sprintf("m3-%s.jsonl", time.Now().UTC().Format("20060102-150405")))
+	raw, err := os.Create(rawPath)
+	if err != nil {
+		return err
+	}
+	defer raw.Close()
+
+	interval := time.Duration(float64(time.Minute) / (float64(maxRate) * 0.85))
+	fmt.Printf("running (raw responses -> %s)\n", rawPath)
+	fmt.Printf("pacing %s between requests; ~%s\n\n",
+		interval.Round(time.Millisecond), (time.Duration(requests) * interval).Round(time.Second))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Minute)
+	defer cancel()
+
+	report, err := measure.RunWording(ctx, limited, measure.WordingConfig{
+		Repeats: repeats, Threshold: threshold, Raw: raw, MinInterval: interval,
+	})
+	if err != nil {
+		return fmt.Errorf("%w\n(partial raw output is in %s)", err, rawPath)
+	}
+
+	printWordingReport(report)
+	fmt.Printf("\nraw responses: %s\n", rawPath)
+	return nil
+}
+
+func printWordingReport(r *measure.WordingReport) {
+	fmt.Printf("=== M3 results ===\n\n")
+	fmt.Printf("model      %s\n", r.Model)
+	fmt.Printf("threshold  %.2f   repeats %d\n", r.Threshold, r.Repeats)
+	fmt.Printf("requests   %d in %s\n", r.Requests, r.Duration.Round(time.Second))
+	fmt.Printf("tokens     %d  ($%.6f)\n\n", r.InputTokens, r.CostUSD)
+
+	var disagreed int
+	var maxSpread, sumSpread, maxNoise float64
+	for _, c := range r.Concepts {
+		if !c.Agreed {
+			disagreed++
+		}
+		sumSpread += c.Spread
+		if c.Spread > maxSpread {
+			maxSpread = c.Spread
+		}
+		if c.NoiseFloor > maxNoise {
+			maxNoise = c.NoiseFloor
+		}
+	}
+
+	fmt.Printf("%-34s %8s %10s %9s %s\n", "message / concept", "deliver", "spread", "noise", "")
+	for _, c := range r.Concepts {
+		flag := ""
+		if !c.Agreed {
+			flag = "  <-- PHRASINGS DISAGREE"
+		}
+		fmt.Printf("%-34s %4d/%-3d %10.3f %9.4f%s\n",
+			c.MessageID+"/"+c.ConceptID,
+			c.DeliverCount, len(c.Results), c.Spread, c.NoiseFloor, flag)
+	}
+
+	fmt.Printf("\ndisagreement rate  %.1f%% (%d of %d message/concept pairs)\n",
+		r.DisagreementRate()*100, disagreed, len(r.Concepts))
+	fmt.Printf("mean spread        %.4f\n", sumSpread/float64(max(len(r.Concepts), 1)))
+	fmt.Printf("max spread         %.4f\n", maxSpread)
+	fmt.Printf("max noise floor    %.4f   (run-to-run, same phrasing)\n", maxNoise)
+	if maxNoise > 0 {
+		fmt.Printf("\nwording moves answers %.1fx as much as repetition does.\n", maxSpread/maxNoise)
+	}
+
+	if disagreed > 0 {
+		fmt.Printf("\nwhere phrasings disagreed:\n")
+		for _, c := range r.Concepts {
+			if c.Agreed {
+				continue
+			}
+			fmt.Printf("\n  %s / %s\n", c.MessageID, c.ConceptID)
+			rs := append([]measure.PhrasingResult(nil), c.Results...)
+			sort.Slice(rs, func(i, j int) bool { return rs[i].Mean > rs[j].Mean })
+			for _, p := range rs {
+				mark := "skip   "
+				if p.Deliver {
+					mark = "DELIVER"
+				}
+				fmt.Printf("    %-7s %.3f  %-16s %q\n", mark, p.Mean, "["+p.Phrasing.Style+"]", p.Phrasing.Text)
+			}
+		}
+	}
 }

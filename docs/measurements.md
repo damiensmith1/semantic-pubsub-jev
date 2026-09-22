@@ -206,7 +206,138 @@ third of a second.
 
 ## M3 — threshold vs. wording
 
-Not yet run. The threshold half is partly answered by M1: within this
-fixture set, threshold choice does not affect stability. The wording half
-— whether "storage problems" behaves like "issues with disks" — is
-untouched.
+**Question:** which matters more to whoever runs this — where the
+threshold sits, or how a subscriber happens to phrase its interest?
+
+### The threshold half, answered by M1
+
+No case straddled any threshold from 0.2 to 0.9. Where the line sits
+decides *which* messages are delivered, but never destabilises a
+decision. The threshold is a well-behaved dial.
+
+### The wording half
+
+Three concepts, each expressed five ways — original, terse, plain
+language, verbose, and (where it applies) with an explicit exclusion.
+Every phrasing is asked **in the same request**, so they see identical
+state and differ only in wording. 8 repeats, 56 requests, **$0.0032**.
+
+The comparison that makes this meaningful: spread across paraphrases,
+against the run-to-run noise floor for a single fixed phrasing. Wording
+only "matters" if it moves answers more than asking twice does.
+
+### Result
+
+**Disagreement rate: 23.8%** — 5 of 21 message/concept pairs had
+phrasings of the *same intent* that routed differently.
+
+| | |
+| --- | --- |
+| Mean spread across phrasings | 0.1729 |
+| Max spread across phrasings | **0.6687** |
+| Max noise floor (same phrasing, repeated) | 0.0240 |
+
+**Wording moves answers 27.9x as much as repetition does.**
+
+### The cases that disagreed
+
+A database failover failure, against five ways of saying "storage
+problems":
+
+```
+DELIVER 0.812  [original]       "database and storage problems, including disk capacity"
+DELIVER 0.725  [with examples]  "storage trouble, for example a disk near capacity..."
+skip    0.282  [verbose]        "anything where persistent storage is failing or filling up..."
+skip    0.179  [plain language] "issues with disks or databases running out of room"
+skip    0.144  [terse]          "disk problems"
+```
+
+A disk at 96% capacity, against five ways of saying "outages" — note that
+the **terse** wording is far more inclusive than the explicit one:
+
+```
+DELIVER 0.811  [terse]          "outages"
+DELIVER 0.530  [verbose]        "complete loss of service availability..."
+skip    0.356  [original]       "hard outages where a service is completely unavailable"
+skip    0.254  [plain language] "something is completely down"
+skip    0.204  [with exclusion] "a service is entirely unavailable to users, not merely slow or degraded"
+```
+
+And one clause changing everything — adding "excluding purely internal or
+infrastructure concerns" took `disk-full/customer` from 0.830 to 0.339:
+
+```
+DELIVER 0.881  [terse]          "customer impact"
+DELIVER 0.830  [original]       "anything that customers would notice or complain about"
+skip    0.339  [with exclusion] "issues visible to end users, excluding purely internal..."
+```
+
+### The pattern
+
+Normalising each message/concept pair so 1.0 is its most inclusive
+wording and 0.0 its least:
+
+| Style | Inclusiveness |
+| --- | --- |
+| with examples | 0.77 |
+| terse | 0.71 |
+| original | 0.69 |
+| verbose | 0.44 |
+| plain language | 0.38 |
+| **with exclusion** | **0.19** |
+
+**The more you specify, the narrower it gets.** Exclusion clauses are by
+far the strongest lever — far stronger than the threshold. Terse
+predicates are broad, because there is less for the message to fail to
+match.
+
+### Verdict
+
+**M3 fails.** Wording dominates, by roughly 28x over the system's own
+noise floor, and a quarter of tested intents routed differently depending
+purely on how they were phrased.
+
+Worth being precise about what this does and does not mean. The model is
+not being erratic — M1 and M2 established it is highly consistent. It is
+reading each predicate **literally and carefully**, and by that standard
+it is arguably right: a failover failure genuinely is not a "disk
+problem". The flawed assumption is the user's, that paraphrases of an
+intent are interchangeable.
+
+So this is a **usability** failure rather than a reliability one, and it
+is the one that would bite in practice. An operator's real problem stops
+being "what do I want?" and becomes "what phrasing gets me what I want?",
+which is a much worse problem to have.
+
+### What would make it usable
+
+None of these are built; they follow from the result.
+
+- **A preview tool.** Register an interest, replay recent messages, see
+  what would have matched. Turns guessing into checking.
+- **Show the probability back.** A subscriber that sees 0.51 knows it is
+  near the line; one that sees 0.98 does not need to worry.
+- **A curated interest catalogue** rather than free text, for deployments
+  that can enumerate what people care about.
+- **Lint the predicate.** Exclusion clauses are so strong that warning on
+  them would prevent the most common surprise.
+
+## Summary
+
+| | Result |
+| --- | --- |
+| **M1** stability | **Pass.** 0.0% flip rate, stddev ≤ 0.0168 |
+| **M2** batch degradation | **Pass.** 0 decision changes from 6 to 200 predicates |
+| **M3** wording sensitivity | **Fail.** 23.8% disagreement, 27.9x the noise floor |
+
+Semantic pub/sub works, and the engineering is sound: routing is
+reproducible, batching is free, 200 subscribers judge in 327ms for $0.81
+per thousand publishes.
+
+What is not solved is the interface. The system reliably delivers what
+you asked for; the difficulty is knowing what you asked for. That is a
+tractable problem, and the mitigations above are where the next work is —
+but it is not solved here, and calling the project finished without
+saying so would be dishonest.
+
+Total spend across all three experiments: **$0.064**.

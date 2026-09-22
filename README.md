@@ -48,21 +48,28 @@ enough to depend on* is unmeasured, and that is the actual deliverable.
 | **M2** | Batch degradation — do answers worsen as predicates per request grow? |
 | **M3** | Threshold vs. wording — which matters more to whoever runs it? |
 
-**M1 and M2 have now been run, and both pass.**
+**All three have now been run. Two pass, one fails.**
 
-- **M1 — stability:** flip rate **0.0%** across 20 repeats of 20
-  message/interest pairs, standard deviation never above 0.0168, and no
+- **M1 — stability: pass.** Flip rate **0.0%** across 20 repeats, and no
   case straddling any threshold from 0.2 to 0.9. Routing is reproducible.
-- **M2 — batch degradation:** **zero decision changes** from 6 to 200
-  predicates in one request. Drift peaked at 0.0140, smaller than the
-  run-to-run variance of asking the same question twice. 200 subscribers
-  judged in **327ms** for **$0.81 per 1,000 publishes**.
+- **M2 — batch degradation: pass.** **Zero decision changes** from 6 to
+  200 predicates in one request. 200 subscribers judged in **327ms** for
+  **$0.81 per 1,000 publishes**.
+- **M3 — wording sensitivity: fail.** **23.8%** of intents routed
+  differently depending only on how they were phrased, moving answers
+  **27.9x** more than the system's own noise floor.
 
-M3 is not yet run.
+The engineering works. The interface does not, yet: the system reliably
+delivers what you asked for, and the hard part is knowing what you asked
+for. Adding "excluding purely internal concerns" to a predicate moved one
+case from 0.830 to 0.339 — a far stronger lever than the threshold.
+
+Total spend across all three experiments: **$0.064**.
 
 Full method, numbers and caveats: [docs/measurements.md](docs/measurements.md).
 
-"It is not good enough" remains a valid result for what is left.
+"It is not good enough" was a valid result, and for M3 it is the one
+that came back.
 
 ## Running it
 
