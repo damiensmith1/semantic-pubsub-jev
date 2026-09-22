@@ -111,7 +111,7 @@ func (j *Judge) Judge(ctx context.Context, msg bus.Message, candidates []bus.Can
 			// tokens to ask. Omitted here, and therefore not delivered to.
 			continue
 		}
-		questions[c.ID] = question(c.Criteria)
+		questions[c.ID] = QuestionFor(c.Criteria)
 	}
 	if len(questions) == 0 {
 		return nil, nil
@@ -172,7 +172,11 @@ func countDelivered(ds []bus.Decision) int {
 	return n
 }
 
-// question renders one subscriber's interest as a Noul.
+// QuestionFor renders one subscriber's interest as a Noul.
+//
+// Exported so the measurement harness asks exactly what the routing path
+// asks. A harness with its own phrasing would measure a prompt that
+// nothing in production uses.
 //
 // The phrasing asks about *delivery* rather than topical similarity. "Is
 // this message about X?" and "would a subscriber interested in X want
@@ -183,7 +187,7 @@ func countDelivered(ds []bus.Decision) int {
 // The predicate is interpolated rather than concatenated loosely so the
 // model sees a clear boundary between the instruction and the
 // subscriber-supplied text. M3 measures how much this phrasing matters.
-func question(predicate string) jev.Noul {
+func QuestionFor(predicate string) jev.Noul {
 	return jev.Noul{
 		Instructions: "A subscriber has stated this interest: \"" + strings.TrimSpace(predicate) +
 			"\". Should the message in the state be delivered to them?",
@@ -193,18 +197,24 @@ func question(predicate string) jev.Noul {
 	}
 }
 
-// state presents the message to the model.
+// StateFor presents a message to the model. Exported for the same reason
+// as QuestionFor.
 //
 // The payload is decoded when it is valid JSON so the model sees named
 // fields rather than an escaped string, which reads better and matches
 // how Jev documents state. Invalid JSON is passed through as raw text
 // rather than failing the publish.
+func StateFor(topic string, body any) any {
+	return map[string]any{"topic": topic, "message": body}
+}
+
+// state decodes a published payload and presents it.
 func state(msg bus.Message) any {
 	var decoded any
 	if len(msg.Data) > 0 && json.Unmarshal(msg.Data, &decoded) == nil {
-		return map[string]any{"topic": msg.Topic, "message": decoded}
+		return StateFor(msg.Topic, decoded)
 	}
-	return map[string]any{"topic": msg.Topic, "message": string(msg.Data)}
+	return StateFor(msg.Topic, string(msg.Data))
 }
 
 // Judge must satisfy the broker's routing hook.

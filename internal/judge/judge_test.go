@@ -271,7 +271,7 @@ func TestStateFallsBackToRawText(t *testing.T) {
 }
 
 func TestQuestionIncludesPredicateAndBothOutcomes(t *testing.T) {
-	q := question("  database and storage problems  ")
+	q := QuestionFor("  database and storage problems  ")
 
 	if !strings.Contains(q.Instructions, "database and storage problems") {
 		t.Errorf("instructions do not carry the predicate: %q", q.Instructions)

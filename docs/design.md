@@ -190,7 +190,7 @@ bounded to one request, because the ceiling is checked against what has
 already been spent rather than an estimate of what the next call will
 cost.
 
-Defaults are deliberately low (\$0.25, 60 calls/min) against a planned
+Defaults are deliberately low ($0.25, 60 calls/min) against a planned
 programme costing roughly six cents.
 
 ## Verified so far

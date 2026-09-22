@@ -48,11 +48,14 @@ enough to depend on* is unmeasured, and that is the actual deliverable.
 | **M2** | Batch degradation — do answers worsen as predicates per request grow? |
 | **M3** | Threshold vs. wording — which matters more to whoever runs it? |
 
-**M1 decides viability. A router that is not reproducible is not a
-router**, and right now there is no evidence either way: the run above
-published each message exactly once, with cleanly separable interests.
+**M1 has now been run: flip rate 0.0%** across 20 repeats of 20
+message/interest pairs, with standard deviation never above 0.0168 and no
+case straddling any threshold from 0.2 to 0.9. Routing is reproducible,
+so the viability gate is cleared. M2 and M3 are not yet run.
 
-"It is not good enough" is a valid result.
+Full method, numbers and caveats: [docs/measurements.md](docs/measurements.md).
+
+"It is not good enough" remains a valid result for what is left.
 
 ## Running it
 
