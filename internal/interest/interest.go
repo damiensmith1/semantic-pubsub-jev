@@ -26,6 +26,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/damiensmith1/go-ws-server/bus"
@@ -142,6 +144,38 @@ func (s *Store) Candidates(ctx context.Context, topic string) ([]bus.Candidate, 
 		}
 		_ = s.rdb.SRem(ctx, s.indexKey(topic), members...).Err()
 	}
+	return out, nil
+}
+
+// Topics lists every topic that currently has at least one interest.
+//
+// There is no topic registry in this system: a topic exists because
+// someone subscribed or published to it. So this is discovered by
+// scanning the index keys rather than read from a list, and a topic
+// disappears on its own once its last interest expires or is dropped.
+//
+// SCAN rather than KEYS: this runs against the same Redis the broker
+// uses, and KEYS would block it for the duration.
+func (s *Store) Topics(ctx context.Context) ([]string, error) {
+	prefix := s.prefix + "idx:"
+	var out []string
+	var cursor uint64
+	for {
+		keys, next, err := s.rdb.Scan(ctx, cursor, prefix+"*", 200).Result()
+		if err != nil {
+			return nil, fmt.Errorf("interest: scan topics: %w", err)
+		}
+		for _, k := range keys {
+			if t := strings.TrimPrefix(k, prefix); t != "" && t != k {
+				out = append(out, t)
+			}
+		}
+		if next == 0 {
+			break
+		}
+		cursor = next
+	}
+	sort.Strings(out)
 	return out, nil
 }
 

@@ -250,3 +250,54 @@ func TestKeyPrefixIsolates(t *testing.T) {
 		t.Fatalf("b = %v", cb)
 	}
 }
+
+// Topics are discovered, not registered: one exists because something
+// subscribed to it, and vanishes when its last interest goes.
+func TestTopicsAreDiscovered(t *testing.T) {
+	s, _ := newStore(t, Options{})
+	ctx := context.Background()
+
+	if got, err := s.Topics(ctx); err != nil || len(got) != 0 {
+		t.Fatalf("got (%v, %v), want no topics on an empty store", got, err)
+	}
+
+	_ = s.Set(ctx, "alerts", "c1", "storage")
+	_ = s.Set(ctx, "deploys", "c1", "rollbacks")
+	_ = s.Set(ctx, "alerts", "c2", "network")
+
+	got, err := s.Topics(ctx)
+	if err != nil {
+		t.Fatalf("Topics: %v", err)
+	}
+	if len(got) != 2 || got[0] != "alerts" || got[1] != "deploys" {
+		t.Fatalf("topics = %v, want [alerts deploys] sorted", got)
+	}
+
+	// Dropping the last interest on a topic retires the topic.
+	_ = s.Drop(ctx, "c1")
+	_ = s.Drop(ctx, "c2")
+	if got, _ := s.Topics(ctx); len(got) != 0 {
+		t.Fatalf("topics = %v, want none once every interest is gone", got)
+	}
+}
+
+func TestTopicsRespectsPrefix(t *testing.T) {
+	mr := miniredis.RunT(t)
+	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	t.Cleanup(func() { _ = rdb.Close() })
+	a, _ := New(rdb, Options{KeyPrefix: "a:"})
+	b, _ := New(rdb, Options{KeyPrefix: "b:"})
+	ctx := context.Background()
+
+	_ = a.Set(ctx, "only-a", "c1", "x")
+	_ = b.Set(ctx, "only-b", "c1", "y")
+
+	ta, _ := a.Topics(ctx)
+	tb, _ := b.Topics(ctx)
+	if len(ta) != 1 || ta[0] != "only-a" {
+		t.Fatalf("a topics = %v", ta)
+	}
+	if len(tb) != 1 || tb[0] != "only-b" {
+		t.Fatalf("b topics = %v", tb)
+	}
+}
