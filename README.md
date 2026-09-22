@@ -24,6 +24,22 @@ delivered:
 That run is real, against live [Jev](https://docs.typesafe.ai). It cost
 $0.000074.
 
+![The console's live view: messages on the deploys topic, each judged against the same two subscribers, with the threshold drawn as a vertical line and every subscriber plotted where it scored.](docs/images/console.png)
+
+Three consecutive messages in that feed, the same two subscribers every
+time, three different outcomes:
+
+| Message | `release` | `schema` |
+| --- | --- | --- |
+| config change enabled the new pricing engine for 2% of traffic | 0.07 | 0.06 |
+| deploy of search v1.9 stuck, three pods crash-looping | **0.96** | 0.09 |
+| migration 0142 added an index to orders, 40 seconds, no lock held | 0.09 | **0.94** |
+
+Both of the last two are deployment events on the `deploys` topic, and they
+go to *different* subscribers — one watching for deploys that did not
+finish cleanly, one watching for schema changes. Nothing about the words
+separates them; what they mean does.
+
 ## Why this is possible now
 
 Calling a language model per message per subscriber should be absurdly
