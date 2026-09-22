@@ -176,8 +176,28 @@ would otherwise replay history.
 Registering an interest for a topic that was never subscribed to is
 harmless — nothing routes to it — so it is not rejected.
 
+### Two spend ceilings, because they catch different failures
+
+A rate cap stops a loop bug in seconds; a spend cap alone would let one
+run for minutes first. A spend cap stops a slow bleed — a dev server left
+running with the judge attached costs little per minute and a lot per
+weekend.
+
+Both refuse the call rather than blocking, so a trip surfaces through the
+broker's failure policy as ordinary topic delivery rather than stalling
+every publisher behind a queue that will not drain. Spend overshoot is
+bounded to one request, because the ceiling is checked against what has
+already been spent rather than an estimate of what the next call will
+cost.
+
+Defaults are deliberately low (\$0.25, 60 calls/min) against a planned
+programme costing roughly six cents.
+
 ## Verified so far
 
+- **Ceilings engage and degrade safely.** With a 2 calls/min cap, the
+  third and fourth publishes were refused, logged at error, and fell back
+  to topic delivery rather than failing the publish.
 - **End to end, against live Jev.** Three subscribers with different
   stated interests, three messages each matching exactly one of them:
   every message reached precisely its intended subscriber and no one

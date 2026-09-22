@@ -20,6 +20,7 @@ import (
 	"github.com/damiensmith1/go-ws-server/wsserver"
 	"github.com/redis/go-redis/v9"
 
+	"github.com/damiensmith1/semantic-pubsub-jev/internal/budget"
 	"github.com/damiensmith1/semantic-pubsub-jev/internal/interest"
 	"github.com/damiensmith1/semantic-pubsub-jev/internal/jev"
 	"github.com/damiensmith1/semantic-pubsub-jev/internal/judge"
@@ -47,6 +48,15 @@ type Config struct {
 
 	// Threshold is the probability at or above which an interest matches.
 	Threshold float64
+
+	// MaxSpendUSD caps cumulative judge spend for the process lifetime.
+	// Zero disables the ceiling and warns.
+	MaxSpendUSD float64
+
+	// MaxCallsPerMin caps the judge call rate. This is the guard that
+	// stops a loop bug in seconds; a spend ceiling alone would let one
+	// run for minutes first. Zero disables it and warns.
+	MaxCallsPerMin int
 
 	// InterestTTL is the backstop for interests whose connection died
 	// without cleanup. Refreshed at a third of this while connected.
@@ -145,7 +155,21 @@ func buildJudge(cfg Config, log *slog.Logger) (bus.Judge, *judge.Judge, error) {
 	if err != nil {
 		return nil, nil, fmt.Errorf("app: jev client: %w", err)
 	}
-	j, err := judge.New(client, judge.Options{Threshold: cfg.Threshold, Log: log})
+
+	// Every judge call goes through the ceilings. A refusal surfaces as a
+	// judge error, which the broker's fail-open policy turns into
+	// ordinary topic delivery — degraded routing rather than lost
+	// messages or a stalled publisher.
+	limited, err := budget.New(client, budget.Options{
+		MaxSpendUSD:    cfg.MaxSpendUSD,
+		MaxCallsPerMin: cfg.MaxCallsPerMin,
+		Log:            log,
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("app: budget: %w", err)
+	}
+
+	j, err := judge.New(limited, judge.Options{Threshold: cfg.Threshold, Log: log})
 	if err != nil {
 		return nil, nil, fmt.Errorf("app: judge: %w", err)
 	}

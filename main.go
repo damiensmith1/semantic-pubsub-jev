@@ -47,6 +47,17 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("MATCH_THRESHOLD: %w", err)
 	}
+	// Deliberately low. The whole planned measurement programme costs
+	// about six cents, so a quarter of a dollar is ample headroom and
+	// still catches a runaway before it matters. Raise it consciously.
+	maxSpend, err := strconv.ParseFloat(getenv("MAX_SPEND_USD", "0.25"), 64)
+	if err != nil {
+		return fmt.Errorf("MAX_SPEND_USD: %w", err)
+	}
+	maxCallsPerMin, err := strconv.Atoi(getenv("MAX_CALLS_PER_MIN", "60"))
+	if err != nil {
+		return fmt.Errorf("MAX_CALLS_PER_MIN: %w", err)
+	}
 	judgeTimeout, err := durationMS("JUDGE_TIMEOUT_MS", 5*time.Second)
 	if err != nil {
 		return err
@@ -57,15 +68,17 @@ func run() error {
 	}
 
 	a, err := app.New(app.Config{
-		ListenAddr:   getenv("LISTEN_ADDR", ":8080"),
-		MetricsAddr:  os.Getenv("METRICS_ADDR"),
-		RedisAddrs:   splitCSV(getenv("REDIS_ADDRS", "localhost:6379")),
-		APIKey:       os.Getenv("TYPESAFE_API_KEY"),
-		Model:        os.Getenv("JEV_MODEL"),
-		Threshold:    threshold,
-		InterestTTL:  interestTTL,
-		JudgeTimeout: judgeTimeout,
-		Log:          log,
+		ListenAddr:     getenv("LISTEN_ADDR", ":8080"),
+		MetricsAddr:    os.Getenv("METRICS_ADDR"),
+		RedisAddrs:     splitCSV(getenv("REDIS_ADDRS", "localhost:6379")),
+		APIKey:         os.Getenv("TYPESAFE_API_KEY"),
+		Model:          os.Getenv("JEV_MODEL"),
+		Threshold:      threshold,
+		MaxSpendUSD:    maxSpend,
+		MaxCallsPerMin: maxCallsPerMin,
+		InterestTTL:    interestTTL,
+		JudgeTimeout:   judgeTimeout,
+		Log:            log,
 	})
 	if err != nil {
 		return err
