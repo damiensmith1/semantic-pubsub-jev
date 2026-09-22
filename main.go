@@ -68,28 +68,40 @@ func run() error {
 	}
 
 	a, err := app.New(app.Config{
-		ListenAddr:     getenv("LISTEN_ADDR", ":8080"),
-		MetricsAddr:    os.Getenv("METRICS_ADDR"),
-		RedisAddrs:     splitCSV(getenv("REDIS_ADDRS", "localhost:6379")),
-		APIKey:         os.Getenv("TYPESAFE_API_KEY"),
-		Model:          os.Getenv("JEV_MODEL"),
-		Threshold:      threshold,
-		MaxSpendUSD:    maxSpend,
-		MaxCallsPerMin: maxCallsPerMin,
-		InterestTTL:    interestTTL,
-		JudgeTimeout:   judgeTimeout,
-		Log:            log,
+		ListenAddr:      getenv("LISTEN_ADDR", ":8080"),
+		MetricsAddr:     os.Getenv("METRICS_ADDR"),
+		RedisAddrs:      splitCSV(getenv("REDIS_ADDRS", "localhost:6379")),
+		APIKey:          os.Getenv("TYPESAFE_API_KEY"),
+		Model:           os.Getenv("JEV_MODEL"),
+		Threshold:       threshold,
+		MaxSpendUSD:     maxSpend,
+		MaxCallsPerMin:  maxCallsPerMin,
+		InterestTTL:     interestTTL,
+		JudgeTimeout:    judgeTimeout,
+		ConsoleAddr:     getenv("CONSOLE_ADDR", ":8090"),
+		Topics:          splitCSV(getenv("TOPICS", defaultTopics)),
+		ResultsDir:      getenv("RESULTS_DIR", "results"),
+		SeedSubscribers: getenv("SEED_SUBSCRIBERS", "true") != "false",
+		Log:             log,
 	})
 	if err != nil {
 		return err
 	}
 
 	log.Info("listening", "addr", a.Addr())
+	if c := getenv("CONSOLE_ADDR", ":8090"); c != "" {
+		log.Info("console", "url", "http://localhost"+c)
+	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	return a.Run(ctx)
 }
+
+// defaultTopics are suggestions, not a registry — a topic exists because
+// something subscribed or published to it. These give the console
+// somewhere to start and a realistic spread to route across.
+const defaultTopics = "alerts.infra,deploys,security"
 
 func getenv(key, fallback string) string {
 	if v := strings.TrimSpace(os.Getenv(key)); v != "" {

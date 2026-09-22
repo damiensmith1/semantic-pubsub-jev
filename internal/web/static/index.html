@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>semantic-pubsub-jev</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=DM+Mono:wght@400;500&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+
+<header class="bar">
+  <span class="mark">semantic&#8203;-pubsub&#8203;-jev</span>
+  <nav class="tabs" role="tablist">
+    <button role="tab" class="tab" data-view="live" aria-selected="true">Live</button>
+      <button role="tab" class="tab" data-view="findings" aria-selected="false">Findings</button>
+  </nav>
+</header>
+
+<div class="err" id="err" role="alert" hidden></div>
+
+<!-- ─────────────────────────── LIVE ─────────────────────────── -->
+<main class="view" id="view-live">
+  <aside class="rail">
+    <section class="blk">
+      <h2>Topic</h2>
+      <select id="topic" aria-label="Topic"></select>
+      <div id="newTopicRow" hidden class="newTopic">
+        <input id="newTopic" type="text" autocomplete="off" spellcheck="false"
+               placeholder="new topic name" aria-label="New topic name">
+        <button type="button" class="btn" id="newTopicGo">Create</button>
+      </div>
+      <p class="hint">Topics are not registered anywhere &mdash; one exists because
+      something subscribed or published to it.</p>
+    </section>
+    <section class="blk">
+      <h2>Subscribers <span class="count" id="subCount"></span></h2>
+      <ul class="subs" id="subs"></ul>
+      <form class="add" id="addForm">
+        <input id="subName" type="text" placeholder="subscriber name" autocomplete="off" spellcheck="false">
+        <textarea id="subPred" rows="2" placeholder="what they want, in plain language"></textarea>
+        <button type="submit" class="btn">Add subscriber</button>
+      </form>
+    </section>
+    <section class="blk">
+      <h2>Publish</h2>
+      <div class="samples" id="samples"></div>
+      <form class="add" id="pubForm">
+        <textarea id="pubBody" rows="3" placeholder="message body"></textarea>
+        <button type="submit" class="btn primary" id="pubBtn">Publish</button>
+      </form>
+    </section>
+    <section class="blk">
+      <h2>Threshold</h2>
+      <div class="thrRow">
+        <input type="range" id="thr" min="0.02" max="0.98" step="0.01" value="0.5">
+        <span class="thrVal" id="thrVal">0.50</span>
+      </div>
+      <p class="hint">Scores are kept, so moving this re-routes the stream below with no new judging.</p>
+    </section>
+  </aside>
+
+  <section class="main">
+    <div class="streamHead">
+      <h2>Delivery</h2>
+      <span>every topic, newest first &mdash; each entry is the decision that actually routed the message</span>
+    </div>
+    <div class="stream" id="stream" aria-live="polite"></div>
+  </section>
+</main>
+
+<!-- ───────────────────────── EXPLORER ───────────────────────── -->
+
+<!-- ───────────────────────── FINDINGS ───────────────────────── -->
+<main class="view" id="view-findings" hidden>
+  <div class="prose"><div id="findingsProse"></div></div>
+  <section class="explore">
+    <div class="exploreHead">
+      <h2>Explore the recorded runs</h2>
+      <p>Every probability behind the numbers above. Move the threshold and the
+      grid recolours &mdash; those answers are already recorded, so re-reading
+      them costs nothing.</p>
+    </div>
+<div class="expBar">
+    <label>run <select id="runSel" aria-label="Recorded run"></select></label>
+    <label id="sizeWrap" hidden>predicates <select id="sizeSel" aria-label="Batch size"></select></label>
+    <label class="grow">threshold
+      <input type="range" id="ethr" min="0.02" max="0.98" step="0.01" value="0.5">
+      <span class="thrVal" id="ethrVal">0.50</span>
+    </label>
+    <span class="expStats" id="expStats"></span>
+  </div>
+  <div class="mxWrap"><table class="mx" id="mx"></table></div>
+  <div class="cellDetail" id="cellDetail"></div>
+  </section>
+</main>
+
+<script src="findings.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

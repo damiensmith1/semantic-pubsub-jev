@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"strings"
 	"time"
 
@@ -24,6 +25,7 @@ import (
 	"github.com/damiensmith1/semantic-pubsub-jev/internal/interest"
 	"github.com/damiensmith1/semantic-pubsub-jev/internal/jev"
 	"github.com/damiensmith1/semantic-pubsub-jev/internal/judge"
+	"github.com/damiensmith1/semantic-pubsub-jev/internal/web"
 )
 
 // VerbInterest is the protocol verb a subscriber uses to state what it
@@ -65,6 +67,24 @@ type Config struct {
 	// JudgeTimeout bounds one judge call. It sits on the publish path.
 	JudgeTimeout time.Duration
 
+	// ConsoleAddr serves the web console on its own listener, e.g. ":8090".
+	// Empty disables it. Separate from the websocket port on purpose: the
+	// console exposes routing internals that clients have no business
+	// reading.
+	ConsoleAddr string
+
+	// Topics the console offers. Empty still works; it just has nothing
+	// to suggest.
+	Topics []string
+
+	// ResultsDir holds recorded measurement runs, served to the explorer.
+	ResultsDir string
+
+	// SeedSubscribers registers demonstration interests on configured
+	// topics that have none, so the console opens with something to route
+	// against. Topics that already have interests are left alone.
+	SeedSubscribers bool
+
 	Log *slog.Logger
 }
 
@@ -73,6 +93,7 @@ type App struct {
 	srv       *wsserver.Server
 	refresher *refresher
 	jevJudge  *judge.Judge // nil when running with the keyword judge
+	console   *http.Server
 	log       *slog.Logger
 }
 
@@ -98,10 +119,15 @@ func New(cfg Config) (*App, error) {
 		return nil, err
 	}
 
-	routingJudge, jevJudge, err := buildJudge(cfg, log)
+	rec := judge.NewRecorder(100)
+	routingJudge, jevJudge, err := buildJudge(cfg, log, rec)
 	if err != nil {
 		_ = rdb.Close()
 		return nil, err
+	}
+
+	if cfg.SeedSubscribers {
+		seedDemoSubscribers(context.Background(), store, cfg.Topics, log)
 	}
 
 	ref := newRefresher(store, cfg.InterestTTL, log)
@@ -139,12 +165,35 @@ func New(cfg Config) (*App, error) {
 		return nil, fmt.Errorf("app: start server: %w", err)
 	}
 
-	return &App{srv: srv, refresher: ref, jevJudge: jevJudge, log: log}, nil
+	app := &App{srv: srv, refresher: ref, jevJudge: jevJudge, log: log}
+
+	if cfg.ConsoleAddr != "" {
+		threshold := cfg.Threshold
+		if threshold <= 0 {
+			threshold = judge.DefaultThreshold
+		}
+		model := cfg.Model
+		if model == "" {
+			model = jev.DefaultModel
+		}
+		h, err := web.Handler(web.Options{
+			Store: store, Recorder: rec, Publisher: srv.Bus(),
+			Threshold: threshold, Topics: cfg.Topics, ResultsDir: cfg.ResultsDir,
+			JudgeLive: jevJudge != nil, Model: model, Log: log,
+		})
+		if err != nil {
+			return nil, err
+		}
+		app.console = &http.Server{
+			Addr: cfg.ConsoleAddr, Handler: h, ReadHeaderTimeout: 10 * time.Second,
+		}
+	}
+	return app, nil
 }
 
 // buildJudge returns the routing judge, and the Jev judge separately when
 // one was built, so cost can be reported at shutdown.
-func buildJudge(cfg Config, log *slog.Logger) (bus.Judge, *judge.Judge, error) {
+func buildJudge(cfg Config, log *slog.Logger, rec *judge.Recorder) (bus.Judge, *judge.Judge, error) {
 	if cfg.APIKey == "" {
 		log.Warn("TYPESAFE_API_KEY is not set — routing with the keyword judge. " +
 			"It is deterministic and free, and has none of the semantic behaviour this project exists to test.")
@@ -169,7 +218,7 @@ func buildJudge(cfg Config, log *slog.Logger) (bus.Judge, *judge.Judge, error) {
 		return nil, nil, fmt.Errorf("app: budget: %w", err)
 	}
 
-	j, err := judge.New(limited, judge.Options{Threshold: cfg.Threshold, Log: log})
+	j, err := judge.New(limited, judge.Options{Threshold: cfg.Threshold, Log: log, Recorder: rec})
 	if err != nil {
 		return nil, nil, fmt.Errorf("app: judge: %w", err)
 	}
@@ -183,6 +232,20 @@ func (a *App) Addr() string { return a.srv.Addr() }
 // cancelled or the server stops.
 func (a *App) Run(ctx context.Context) error {
 	go a.refresher.run(ctx)
+
+	if a.console != nil {
+		go func() {
+			a.log.Info("console listening", "addr", a.console.Addr)
+			if err := a.console.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				a.log.Error("console server stopped", "err", err.Error())
+			}
+		}()
+		defer func() {
+			sctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_ = a.console.Shutdown(sctx)
+		}()
+	}
 
 	err := a.srv.Run(ctx)
 
