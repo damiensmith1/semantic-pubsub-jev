@@ -75,15 +75,58 @@ that came back.
 
 ```bash
 cp .env.example .env          # add TYPESAFE_API_KEY
-redis-server --port 6399 --save '' --daemonize yes
-
-LISTEN_ADDR=:8123 REDIS_ADDRS=127.0.0.1:6399 go run .
-go run ./cmd/demo 127.0.0.1:8123
+redis-server --port 6379 --save '' --daemonize yes
+go run .
 ```
+
+Then open **<http://localhost:8090>**.
 
 Without an API key it falls back to a keyword judge: deterministic, free,
 and with none of the semantic behaviour that is the point — useful for
-development, useless as evidence.
+development, useless as evidence. The console says so when it happens.
+
+## The console
+
+Three subscribers per default topic are seeded on first run, so there is
+something to route against immediately. They overlap on purpose: a failed
+database failover is both a storage problem and an on-call problem, so
+messages land on both, one, or neither depending on what they say.
+
+**Live** is the working view. Pick a topic, add subscribers in plain
+language, and click an example message to publish it — every subscriber on
+that topic is judged in one request, and the decision that *actually routed
+the message* appears in the feed. Each entry plots its subscribers on a
+shared 0→1 axis with the threshold drawn through it, so who cleared the
+line is a matter of looking rather than reading numbers.
+
+Moving the threshold re-routes the whole feed instantly and costs nothing:
+the scores are already recorded.
+
+The feed spans **every topic**, not just the selected one.
+
+**Findings** is this README's argument in longer form, with the three
+measurements and what they showed. At the foot of it, **Explore** loads any
+recorded run from `results/` — the full matrix of probabilities behind
+M1, M2 and M3, with the same threshold slider.
+
+### How the console gets its numbers
+
+It observes; it does not re-judge. The judge records what it decided into a
+bounded ring, and the console reads that back over server-sent events.
+Judging a second time to populate a UI would double the cost and could
+disagree with the decision that was actually applied.
+
+A publish to a topic with no subscribers never reaches the judge at all, so
+the console records the bare publish itself — *"no subscribers, nothing
+judged"* is a different fact from *"nobody matched"*, and both are different
+from the publish having failed.
+
+| Variable | Default | |
+| --- | --- | --- |
+| `CONSOLE_ADDR` | `:8090` | Separate listener from the websocket port — the console exposes routing internals clients have no business reading. |
+| `TOPICS` | `alerts.infra,deploys,security` | Suggestions, not a registry. Any topic you type is created by being used. |
+| `SEED_SUBSCRIBERS` | `true` | Only ever writes to topics that have none. |
+| `RESULTS_DIR` | `results` | Recorded runs served to Explore. |
 
 ### Protocol
 
