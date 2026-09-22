@@ -48,10 +48,17 @@ enough to depend on* is unmeasured, and that is the actual deliverable.
 | **M2** | Batch degradation — do answers worsen as predicates per request grow? |
 | **M3** | Threshold vs. wording — which matters more to whoever runs it? |
 
-**M1 has now been run: flip rate 0.0%** across 20 repeats of 20
-message/interest pairs, with standard deviation never above 0.0168 and no
-case straddling any threshold from 0.2 to 0.9. Routing is reproducible,
-so the viability gate is cleared. M2 and M3 are not yet run.
+**M1 and M2 have now been run, and both pass.**
+
+- **M1 — stability:** flip rate **0.0%** across 20 repeats of 20
+  message/interest pairs, standard deviation never above 0.0168, and no
+  case straddling any threshold from 0.2 to 0.9. Routing is reproducible.
+- **M2 — batch degradation:** **zero decision changes** from 6 to 200
+  predicates in one request. Drift peaked at 0.0140, smaller than the
+  run-to-run variance of asking the same question twice. 200 subscribers
+  judged in **327ms** for **$0.81 per 1,000 publishes**.
+
+M3 is not yet run.
 
 Full method, numbers and caveats: [docs/measurements.md](docs/measurements.md).
 

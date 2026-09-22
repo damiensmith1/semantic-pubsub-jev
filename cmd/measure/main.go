@@ -5,8 +5,13 @@
 // It is the viability gate: a router that is not reproducible is not a
 // router.
 //
-//	go run ./cmd/measure -repeats 20 -dry-run     # projected cost, spends nothing
-//	go run ./cmd/measure -repeats 20              # the real thing
+// M2 — batch degradation. Anchor cases are held fixed while the request
+// is padded with filler subscribers, so any change in their answers is
+// attributable to the padding.
+//
+//	go run ./cmd/measure -m1 -repeats 20 -dry-run   # projected cost, spends nothing
+//	go run ./cmd/measure -m1 -repeats 20            # the real thing
+//	go run ./cmd/measure -m2 -repeats 5
 //
 // Every raw response is written to results/ as JSON lines, so a run
 // happens once and can be re-analysed forever. Re-running to try a
@@ -21,9 +26,12 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/joho/godotenv"
@@ -42,6 +50,9 @@ func main() {
 
 func run() error {
 	var (
+		m1        = flag.Bool("m1", false, "run M1: judgment stability")
+		m2        = flag.Bool("m2", false, "run M2: batch degradation")
+		sizes     = flag.String("sizes", "6,25,50,100,200", "M2 batch sizes (total questions per request)")
 		repeats   = flag.Int("repeats", 20, "how many times to judge each message")
 		threshold = flag.Float64("threshold", 0.5, "routing threshold whose flips are counted")
 		model     = flag.String("model", "jev-1.13.0", "model to pin; an alias moves and would confound the run")
@@ -55,6 +66,16 @@ func run() error {
 
 	if *analyse != "" {
 		return analyseRecorded(*analyse, *threshold)
+	}
+	if !*m1 && !*m2 {
+		return fmt.Errorf("choose an experiment: -m1 (stability) or -m2 (batch degradation)")
+	}
+	if *m1 && *m2 {
+		return fmt.Errorf("run one experiment at a time")
+	}
+
+	if *m2 {
+		return runM2(*sizes, *repeats, *threshold, *model, *maxSpend, *maxRate, *outDir, *dryRun)
 	}
 
 	requests, tokens, usd := measure.EstimateCost(*repeats, len(measure.Messages), len(measure.Interests))
@@ -255,4 +276,163 @@ func analyseRecorded(path string, threshold float64) error {
 	}
 	fmt.Printf("\nflip rate %.1f%% (%d of %d)\n", float64(flipped)/float64(total)*100, flipped, total)
 	return nil
+}
+
+func parseSizes(s string) ([]int, error) {
+	var out []int
+	for _, p := range strings.Split(s, ",") {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		n, err := strconv.Atoi(p)
+		if err != nil || n <= 0 {
+			return nil, fmt.Errorf("bad size %q", p)
+		}
+		out = append(out, n)
+	}
+	if len(out) < 2 {
+		return nil, fmt.Errorf("need at least two sizes to measure drift between them")
+	}
+	sort.Ints(out)
+	return out, nil
+}
+
+func runM2(sizesArg string, repeats int, threshold float64, model string,
+	maxSpend float64, maxRate int, outDir string, dryRun bool) error {
+
+	sizes, err := parseSizes(sizesArg)
+	if err != nil {
+		return err
+	}
+	requests, tokens, usd := measure.EstimateBatchCost(sizes, repeats, len(measure.Messages))
+
+	fmt.Printf("M2 — batch degradation\n\n")
+	fmt.Printf("  sizes       %v  (baseline %d)\n", sizes, sizes[0])
+	fmt.Printf("  messages    %d\n", len(measure.Messages))
+	fmt.Printf("  anchors     %d interests, %d cases\n", len(measure.Interests), len(measure.Cases))
+	fmt.Printf("  repeats     %d per size\n", repeats)
+	fmt.Printf("  requests    %d\n", requests)
+	fmt.Printf("  est. tokens %d\n", tokens)
+	fmt.Printf("  est. cost   $%.4f   (ceiling $%.4f)\n\n", usd, maxSpend)
+
+	if dryRun {
+		fmt.Println("dry run: nothing was sent, nothing was spent.")
+		return nil
+	}
+	if usd > maxSpend {
+		return fmt.Errorf("projected cost $%.4f exceeds the -budget ceiling $%.4f; raise it deliberately or lower -repeats", usd, maxSpend)
+	}
+
+	_ = godotenv.Load()
+	key := os.Getenv("TYPESAFE_API_KEY")
+	if key == "" {
+		return fmt.Errorf("TYPESAFE_API_KEY is not set; put it in .env")
+	}
+	client, err := jev.New(jev.Options{APIKey: key, Model: model})
+	if err != nil {
+		return err
+	}
+	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	limited, err := budget.New(client, budget.Options{
+		MaxSpendUSD: maxSpend, MaxCallsPerMin: maxRate, Log: log,
+	})
+	if err != nil {
+		return err
+	}
+
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		return err
+	}
+	rawPath := filepath.Join(outDir, fmt.Sprintf("m2-%s.jsonl", time.Now().UTC().Format("20060102-150405")))
+	raw, err := os.Create(rawPath)
+	if err != nil {
+		return err
+	}
+	defer raw.Close()
+
+	interval := time.Duration(float64(time.Minute) / (float64(maxRate) * 0.85))
+	fmt.Printf("running (raw responses -> %s)\n", rawPath)
+	fmt.Printf("pacing %s between requests; ~%s\n\n",
+		interval.Round(time.Millisecond), (time.Duration(requests) * interval).Round(time.Second))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Minute)
+	defer cancel()
+
+	report, err := measure.RunBatch(ctx, limited, measure.BatchConfig{
+		Sizes: sizes, Repeats: repeats, Threshold: threshold,
+		Raw: raw, MinInterval: interval,
+	})
+	if err != nil {
+		return fmt.Errorf("%w\n(partial raw output is in %s)", err, rawPath)
+	}
+
+	printBatchReport(report)
+	fmt.Printf("\nraw responses: %s\n", rawPath)
+	return nil
+}
+
+func printBatchReport(r *measure.BatchReport) {
+	fmt.Printf("=== M2 results ===\n\n")
+	fmt.Printf("model      %s\n", r.Model)
+	fmt.Printf("threshold  %.2f   baseline size %d\n", r.Threshold, r.Baseline)
+	fmt.Printf("requests   %d in %s\n", r.Requests, r.Duration.Round(time.Second))
+	fmt.Printf("tokens     %d  ($%.6f)\n\n", r.InputTokens, r.CostUSD)
+
+	fmt.Printf("%-6s %10s %13s %12s %8s %12s %10s\n",
+		"size", "latency", "mean |drift|", "max |drift|", "flips", "tokens/req", "$/1k pub")
+	for _, s := range r.Sizes {
+		perReq := 0
+		if s.Requests > 0 {
+			perReq = s.InputTokens / s.Requests
+		}
+		perThousand := 0.0
+		if s.Requests > 0 {
+			perThousand = s.CostUSD / float64(s.Requests) * 1000
+		}
+		fmt.Printf("%-6d %10s %13.4f %12.4f %8d %12d %10.4f\n",
+			s.Size, s.MeanLatency.Round(time.Millisecond),
+			s.MeanAbsDrift, s.MaxAbsDrift, s.DecisionChanges, perReq, perThousand)
+	}
+
+	// Only the cases that actually moved are worth printing in full.
+	fmt.Printf("\nlargest drifts:\n")
+	type mv struct {
+		name  string
+		size  int
+		base  float64
+		mean  float64
+		drift float64
+		flip  bool
+	}
+	var moved []mv
+	for _, p := range r.Points {
+		if p.Size == r.Baseline {
+			continue
+		}
+		moved = append(moved, mv{p.MessageID + "/" + p.InterestID, p.Size,
+			p.Mean - p.Drift, p.Mean, p.Drift, p.DecisionChanged})
+	}
+	sort.Slice(moved, func(i, j int) bool {
+		return math.Abs(moved[i].drift) > math.Abs(moved[j].drift)
+	})
+	shown := 0
+	for _, m := range moved {
+		if shown >= 8 {
+			break
+		}
+		flag := ""
+		if m.flip {
+			flag = "  <-- DECISION CHANGED"
+		}
+		fmt.Printf("  %-30s n=%-4d %.3f -> %.3f  (%+.3f)%s\n",
+			m.name, m.size, m.base, m.mean, m.drift, flag)
+		shown++
+	}
+
+	var totalFlips int
+	for _, s := range r.Sizes {
+		totalFlips += s.DecisionChanges
+	}
+	fmt.Printf("\ndecision changes vs baseline: %d\n", totalFlips)
 }

@@ -118,11 +118,95 @@ reflects a difference in input rather than noise.
 
 ## M2 — batch degradation
 
-Not yet run.
+**Question:** latency is already known to be near-flat in question count,
+which is what makes batching affordable. Is *accuracy* flat too? If a
+request carrying 200 predicates answers the same questions differently
+from one carrying 6, the economic argument for batching costs
+correctness, and there is a practical ceiling on subscribers per topic.
+
+### Method
+
+Anchor cases are held fixed — the same 6 interests, the same 7 messages,
+the same 20 scored pairs as M1 — while the request is padded with filler
+subscribers to reach the target size. Because the anchor questions are
+identical at every size, any change in their answers is attributable to
+the padding and nothing else.
+
+Filler predicates are plausible and distinct ("certificate expiry and TLS
+problems", "queue backlogs and consumer lag") rather than nonsense.
+Padding with gibberish would measure how the model handles gibberish
+instead of how it handles scale.
+
+Sizes 6, 25, 50, 100, 200. 5 repeats each. 175 requests, 1,315,475 input
+tokens, **$0.0553**, 1m43s. Baseline is size 6.
+
+### Result
+
+**Zero decision changes at any size.** No anchor case routed differently
+at 200 predicates than it did at 6.
+
+| Size | Mean latency | Mean \|drift\| | Max \|drift\| | Decision changes |
+| --- | --- | --- | --- | --- |
+| 6 | 202ms | — | — | baseline |
+| 25 | 191ms | 0.0017 | 0.0120 | 0 |
+| 50 | 230ms | 0.0016 | 0.0080 | 0 |
+| 100 | 221ms | 0.0018 | 0.0100 | 0 |
+| 200 | 327ms | 0.0030 | 0.0140 | 0 |
+
+**Drift stays inside the noise floor.** M1 measured per-case standard
+deviation up to 0.0168 at a fixed batch size; the largest drift observed
+here across a 33x change in batch size is 0.0140. The effect of adding
+194 subscribers to a request is smaller than the run-to-run variance of
+asking the same question twice.
+
+Largest individual movements, all harmless:
+
+```
+cascade/storage                n=200  0.830 -> 0.816  (-0.014)
+partial-degradation/customer   n=25   0.632 -> 0.620  (-0.012)
+disk-full/customer             n=200  0.830 -> 0.842  (+0.012)
+latency/customer               n=200  0.788 -> 0.798  (+0.010)
+```
+
+### Cost and latency at scale
+
+| Size | Tokens/request | Mean latency | $/1,000 publishes |
+| --- | --- | --- | --- |
+| 6 | 875 | 202ms | $0.037 |
+| 25 | 2,599 | 191ms | $0.109 |
+| 50 | 4,985 | 230ms | $0.209 |
+| 100 | 9,771 | 221ms | $0.410 |
+| 200 | 19,355 | 327ms | $0.813 |
+
+Cost is linear in subscriber count, as expected — tokens scale with
+questions. **Latency is not.** Going from 6 to 200 subscribers, a 33x
+increase in work, costs 62% more wall time. That is the property the
+whole design rests on, now measured at the top end rather than
+extrapolated.
+
+### Caveats
+
+**The drift trend is monotonic.** Mean drift rises 0.0017 → 0.0030 across
+the range. It is tiny, but it is not noise-shaped, so it may well
+continue past 200. This run did not find the ceiling.
+
+**200 was not a limit, just a stopping point.** At roughly 67 tokens per
+question, 200 questions is about 13k tokens against a 32k budget for
+state plus the longest question. There is headroom to test further.
+
+**5 repeats per size.** Enough to separate drift from variance given how
+small both are; not enough to catch a rare outlier.
+
+### Verdict
+
+**M2 passes.** Batching does not degrade the answers over the range
+tested. A topic can carry at least 200 semantically-routed subscribers
+with no measurable loss of routing quality, one request, and roughly a
+third of a second.
 
 ## M3 — threshold vs. wording
 
-Not yet run. The threshold half is partly answered above: within this
+Not yet run. The threshold half is partly answered by M1: within this
 fixture set, threshold choice does not affect stability. The wording half
 — whether "storage problems" behaves like "issues with disks" — is
 untouched.
